@@ -26,6 +26,10 @@ class Config:
     PEN_PC_CONTRACT = "0x02fa6e744C68B02F694fD29ECA7B4929718a8721"
     SETSUKO_DISTRIBUTOR = "0xeC18CcC474C0CB470D947bE03a107989B980AD31"
 
+    # Ethereum mainnet (web3 fallback for PEN balance)
+    ETH_RPC = os.getenv("ETH_RPC", "https://eth.drpc.org")
+    PEN_ETH_CONTRACT = "0x5ee3188a3f8adee1d736edd4ae85000105c88f66"
+
     # Server
     PORT = int(os.getenv("PORT", 9022))
     HOST = os.getenv("HOST", "0.0.0.0")

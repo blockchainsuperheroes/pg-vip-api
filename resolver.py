@@ -160,26 +160,37 @@ def fetch_pen_balance_api(address):
     return {"api_total": 0, "ethereum": 0, "arbitrum": 0}
 
 
-def fetch_pen_balance_onchain(address):
-    """PEN ERC-20 balance on Pentagon Chain via direct RPC call."""
+def _balanceof_rpc(rpc_url, contract, address):
+    """Generic balanceOf via direct RPC call. Returns float balance (18 decimals)."""
     try:
         padded = address.lower().replace("0x", "").zfill(64)
         data = BALANCEOF_SELECTOR + padded
         payload = {
             "jsonrpc": "2.0",
             "method": "eth_call",
-            "params": [{"to": Config.PEN_PC_CONTRACT, "data": data}, "latest"],
+            "params": [{"to": contract, "data": data}, "latest"],
             "id": 1,
         }
-        r = httpx.post(Config.PENTAGON_RPC, json=payload, timeout=Config.HTTP_TIMEOUT)
+        r = httpx.post(rpc_url, json=payload, timeout=Config.HTTP_TIMEOUT)
         if r.status_code == 200:
             result = r.json().get("result", "0x0")
             if result and result != "0x":
                 raw = int(result, 16)
                 return raw / 1e18
     except Exception as e:
-        logger.error(f"PEN on-chain error for {address}: {e}")
+        logger.error(f"balanceOf RPC error ({rpc_url}, {contract}) for {address}: {e}")
     return 0
+
+
+def fetch_pen_balance_onchain(address):
+    """PEN ERC-20 balance on Pentagon Chain via direct RPC call."""
+    return _balanceof_rpc(Config.PENTAGON_RPC, Config.PEN_PC_CONTRACT, address)
+
+
+def fetch_pen_balance_eth_onchain(address):
+    """PEN ERC-20 balance on Ethereum mainnet via direct RPC call.
+    Used as web3 fallback when Service API returns 0."""
+    return _balanceof_rpc(Config.ETH_RPC, Config.PEN_ETH_CONTRACT, address)
 
 
 def fetch_zor_balance(address):
@@ -302,10 +313,19 @@ def collect_onchain_holdings(wallets):
         # PEN: API (ETH + ARB) + on-chain (Pentagon Chain)
         pen_api = fetch_pen_balance_api(addr)
         pen_pc = fetch_pen_balance_onchain(addr)
-        wallet_pen = pen_api["api_total"] + pen_pc
+
+        # Web3 fallback: if Service API returns 0 for ETH, check on-chain directly
+        eth_pen = pen_api["ethereum"]
+        if eth_pen == 0:
+            eth_pen_onchain = fetch_pen_balance_eth_onchain(addr)
+            if eth_pen_onchain > 0:
+                logger.info(f"Service API returned 0 ETH PEN for {addr}, web3 fallback found {eth_pen_onchain:,.2f}")
+                eth_pen = eth_pen_onchain
+
+        wallet_pen = eth_pen + pen_api["arbitrum"] + pen_pc
         total_pen += wallet_pen
         pen_by_chain["pentagon"] += pen_pc
-        pen_by_chain["ethereum"] += pen_api["ethereum"]
+        pen_by_chain["ethereum"] += eth_pen
         pen_by_chain["arbitrum"] += pen_api["arbitrum"]
 
         # ZOR
