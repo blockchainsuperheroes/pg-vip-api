@@ -20,7 +20,7 @@ python app.py
 ## Endpoint
 
 ```
-GET /user/vip?wallet=0x...&include=balances,nfts,roles,wallets,progress
+GET /user/vip_status?wallet=0x...
 ```
 
 **Auth:** `X-VIP-API-Key` or `X-PG-App-Key` header
@@ -29,25 +29,36 @@ GET /user/vip?wallet=0x...&include=balances,nfts,roles,wallets,progress
 - `wallet` — EVM address
 - `username` — PG username
 - `discord_id` — Discord snowflake ID
-- `include` — comma-separated: `balances`, `nfts`, `roles`, `wallets`, `progress`
+
+No `include=` param. Returns everything flat in one shot.
 
 **Response:**
 ```json
 {
   "status": true,
   "result": {
-    "tier": {
-      "level": 2,
-      "name": "VIP2",
-      "resolved_from": "on_chain",
-      "sources": {
-        "discord_role_tier": 1,
-        "on_chain_tier": 2,
-        "effective_tier": 2
-      }
-    },
-    "identity": { "username": "nftprof", "primary_wallet": "0x...", "verified": true },
-    "referral": { "rate": 0.05, "rate_display": "5%", "can_payout": true }
+    "effective_tier": 2,
+    "tier_name": "VIP2",
+    "on_chain_tier": 2,
+    "role_tier": 1,
+    "resolved_from": "on_chain",
+    "username": "nftprof",
+    "primary_wallet": "0x...",
+    "verified": true,
+    "referral_rate": 0.05,
+    "referral_rate_display": "5%",
+    "can_payout": true,
+    "pen_total": 1200000.0,
+    "zor_total": 52000.0,
+    "bcsh_count": 3,
+    "has_bcsh": true,
+    "has_ethan": false,
+    "has_chain_hero": true,
+    "has_obelith": false,
+    "discord_roles": ["VIP1", "BCSH Holder", "PG User"],
+    "sub_roles": ["200K PEN", "1M PEN", "BCSH", "Chain Hero"],
+    "wallets": ["0x..."],
+    "progress": { "current_tier": "VIP2", "next_tier": "VIP3", "upgrade_options": ["3,800,000 more PEN"] }
   }
 }
 ```

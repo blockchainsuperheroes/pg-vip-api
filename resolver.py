@@ -425,14 +425,12 @@ def calc_progress(holdings, effective_tier):
 
 # ─── Main resolve ─────────────────────────────────────────────
 
-def resolve(wallet=None, username=None, discord_id=None, includes=None):
+def resolve(wallet=None, username=None, discord_id=None):
     """
     Main entry point. Single source of truth.
 
-    Returns dict with effective tier, sources, and optional details.
+    Returns flat dict with everything. No include= nonsense.
     """
-    includes = set(includes or [])
-
     # 1. Find user
     user = lookup_user(wallet=wallet, username=username, discord_id=discord_id)
     if not user:
@@ -466,62 +464,49 @@ def resolve(wallet=None, username=None, discord_id=None, includes=None):
     rate = REFERRAL_RATES.get(effective_tier, 0)
     can_payout = effective_tier >= 2
 
-    # 6. Build response
-    result = {
-        "tier": {
-            "level": effective_tier,
-            "name": TIER_NAMES.get(effective_tier, "Newcomer"),
-            "resolved_from": resolved_from,
-            "sources": {
-                "discord_role_tier": role_tier,
-                "on_chain_tier": chain_tier,
-                "effective_tier": effective_tier,
-            },
-        },
-        "identity": {
-            "username": user.get("username"),
-            "primary_wallet": user.get("mm_address"),
-            "verified": user.get("verified", False),
-        },
-        "referral": {
-            "rate": rate,
-            "rate_display": f"{int(rate * 100)}%" if rate > 0 else "0%",
-            "can_payout": can_payout,
-        },
+    # 6. Build flat response — everything in one shot
+    progress = calc_progress(holdings, effective_tier)
+
+    return {
+        # Tier resolution
+        "effective_tier": effective_tier,
+        "tier_name": TIER_NAMES.get(effective_tier, "Newcomer"),
+        "on_chain_tier": chain_tier,
+        "role_tier": role_tier,
+        "resolved_from": resolved_from,
+
+        # Identity
+        "username": user.get("username"),
+        "primary_wallet": user.get("mm_address"),
+        "verified": user.get("verified", False),
+
+        # Referral
+        "referral_rate": rate,
+        "referral_rate_display": f"{int(rate * 100)}%" if rate > 0 else "0%",
+        "can_payout": can_payout,
+
+        # Balances
+        "pen_total": round(holdings["pen"], 2),
+        "pen_by_chain": {k: round(v, 2) for k, v in holdings.get("pen_by_chain", {}).items()},
+        "zor_total": round(holdings["zor"], 2),
+
+        # NFTs
+        "bcsh_count": holdings["bcsh_count"],
+        "has_bcsh": holdings["has_bcsh"],
+        "has_ethan": holdings["has_ethan"],
+        "ethan_count": holdings.get("ethan_count", 0),
+        "has_chain_hero": holdings["has_chain_hero"],
+        "has_obelith": holdings["has_obelith"],
+        "has_dark": holdings.get("has_dark", False),
+        "nft_names": holdings["nft_names"],
+
+        # Discord roles
+        "discord_roles": discord_roles,
+        "sub_roles": sub_roles,
+
+        # Wallets
+        "wallets": wallets,
+
+        # Progress
+        "progress": progress,
     }
-
-    # Optional includes
-    if "balances" in includes:
-        result["balances"] = {
-            "pen": {
-                "total": round(holdings["pen"], 2),
-                "by_chain": {k: round(v, 2) for k, v in holdings.get("pen_by_chain", {}).items()},
-            },
-            "zor": {
-                "total": round(holdings["zor"], 2),
-            },
-        }
-
-    if "nfts" in includes:
-        result["nfts"] = {
-            "bcsh_count": holdings["bcsh_count"],
-            "has_bcsh": holdings["has_bcsh"],
-            "has_ethan": holdings["has_ethan"],
-            "ethan_count": holdings.get("ethan_count", 0),
-            "has_chain_hero": holdings["has_chain_hero"],
-            "has_obelith": holdings["has_obelith"],
-            "has_dark": holdings.get("has_dark", False),
-            "nft_names": holdings["nft_names"],
-        }
-
-    if "roles" in includes:
-        result["discord_roles"] = discord_roles
-        result["sub_roles"] = sub_roles
-
-    if "wallets" in includes:
-        result["wallets"] = wallets
-
-    if "progress" in includes:
-        result["progress"] = calc_progress(holdings, effective_tier)
-
-    return result

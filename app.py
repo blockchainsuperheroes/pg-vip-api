@@ -37,23 +37,22 @@ def check_auth():
 
 # ─── Routes ───────────────────────────────────────────────────
 
-@app.route("/user/vip", methods=["GET"])
+@app.route("/user/vip_status", methods=["GET"])
 def get_vip_status():
     """
-    GET /user/vip
+    GET /user/vip_status
 
     Single source of truth for VIP status. Backend does everything:
     - Looks up user by wallet / username / discord_id
     - Source A: checks Discord roles from DB
     - Source B: queries Service API + BCSH API for all bound wallets
     - Evaluates thresholds, does max(rolesTier, onChainTier)
-    - Returns clean JSON with correct referral rate
+    - Returns flat JSON with everything in one shot
 
     Query params:
       wallet     - EVM address
       username   - PG username
       discord_id - Discord snowflake
-      include    - comma-separated: balances,nfts,roles,wallets,progress
     """
     if not check_auth():
         return jsonify({"status": False, "error": "Missing or invalid API key"}), 401
@@ -61,8 +60,6 @@ def get_vip_status():
     wallet = request.args.get("wallet")
     username = request.args.get("username")
     discord_id = request.args.get("discord_id")
-    include_raw = request.args.get("include", "")
-    includes = [s.strip() for s in include_raw.split(",") if s.strip()]
 
     if not any([wallet, username, discord_id]):
         return jsonify({
@@ -75,7 +72,6 @@ def get_vip_status():
             wallet=wallet,
             username=username,
             discord_id=discord_id,
-            includes=includes,
         )
     except Exception as e:
         logger.exception("VIP resolve failed")
@@ -85,6 +81,12 @@ def get_vip_status():
         return jsonify({"status": False, "error": "User not found"}), 404
 
     return jsonify({"status": True, "result": result})
+
+
+# Keep /user/vip as alias during migration
+@app.route("/user/vip", methods=["GET"])
+def get_vip_status_alias():
+    return get_vip_status()
 
 
 @app.route("/health", methods=["GET"])
@@ -98,14 +100,13 @@ def index():
     """Service info."""
     return jsonify({
         "service": "Pentagon VIP API",
-        "version": "1.0.0",
-        "endpoint": "GET /user/vip",
+        "version": "1.1.0",
+        "endpoint": "GET /user/vip_status",
         "docs": "https://blockchainsuperheroes.github.io/pg-role-bot-docs/",
         "params": {
             "wallet": "EVM address",
             "username": "PG username",
             "discord_id": "Discord snowflake ID",
-            "include": "comma-separated: balances, nfts, roles, wallets, progress",
         },
         "auth": "X-VIP-API-Key or X-PG-App-Key header",
     })
