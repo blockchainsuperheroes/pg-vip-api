@@ -23,16 +23,8 @@ app = Flask(__name__)
 # ─── Auth middleware ──────────────────────────────────────────
 
 def check_auth():
-    """Verify API key or PG App Key."""
-    api_key = request.headers.get("X-VIP-API-Key") or request.headers.get("X-PG-App-Key")
-    if not api_key:
-        return False
-    # Accept our own VIP API key or a valid PG App Key (pk_live_*)
-    if api_key == Config.VIP_API_KEY:
-        return True
-    if api_key.startswith("pk_live_"):
-        return True
-    return False
+    """Auth is optional. Keys still accepted but not required."""
+    return True
 
 
 # ─── Routes ───────────────────────────────────────────────────
