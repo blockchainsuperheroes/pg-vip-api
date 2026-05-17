@@ -71,7 +71,7 @@ curl "https://api.account.pentagon.games/user/vip_status?username=nftprof"
     "has_chain_hero": true,
     "has_obelith": true,
     "has_dark": true,
-    "nft_names": ["Nomad", "Setsuko", "BCSH CORE", "Lazuli"],
+    "nft_names": ["Nomad", "Dark Setsuko", "Obelith Setsuko", "BCSH CORE", "Lazuli"],
 
     "discord_roles": ["VIP2", "BCSH Holder", "PG User"],
     "sub_roles": ["200K PEN", "1M PEN", "BCSH", "Chain Hero"],
@@ -159,12 +159,14 @@ curl "https://api.account.pentagon.games/user/vip_status?username=nftprof"
 
 Token OR NFT qualifies. Whichever gives the higher tier wins.
 
-**Chain Hero NFTs:** Setsuko, Lazuli, Avyaan, Launch, Nomad, BCSH CORE
+**Chain Hero NFTs:** Setsuko, Dark Setsuko, Obelith Setsuko, Lazuli, Avyaan, Launch, Nomad, BCSH CORE
 
 **Setsuko tiers (on-chain):**
 - Normal Setsuko = Chain Hero (VIP2 path)
 - Dark Setsuko (tier 1) = Chain Hero (VIP2 path)
 - Obelith Setsuko (tier 2) = VIP3 path
+
+> **Note:** The BCSH API returns variant names ("Dark Setsuko", "Obelith Setsuko") rather than plain "Setsuko". The resolver uses substring matching to detect all Setsuko variants, then calls `tokenTier()` on-chain with the full token ID (including `5555` chain prefix) to determine the exact tier.
 
 ## Architecture
 
@@ -301,6 +303,7 @@ web3==7.12.0
 
 | Version | Changes |
 |---------|---------|
+| v1.4 | Fixed Setsuko tier detection: substring name matching + full token ID for `tokenTier()` |
 | v1.3 | Made endpoint public, no auth required |
 | v1.2 | Web3 fallback for ETH PEN balance when Service API flakes |
 | v1.1 | Renamed to `/user/vip_status`, flattened response, removed `include=` param |
