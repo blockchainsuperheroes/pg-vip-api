@@ -29,7 +29,7 @@ THRESHOLDS = {
     1: {"pen": 200_000, "zor": 10_000},
 }
 
-CHAIN_HERO_NAMES = {"Setsuko", "Lazuli", "Avyaan", "Launch", "Nomad", "BCSH CORE"}
+CHAIN_HERO_NAMES = {"Setsuko", "Dark Setsuko", "Obelith Setsuko", "Lazuli", "Avyaan", "Launch", "Nomad", "BCSH CORE"}
 
 REFERRAL_RATES = {
     0: 0.00,   # Newcomer — nothing
@@ -253,11 +253,8 @@ def fetch_ethan_nfts(address):
 def check_setsuko_tier_onchain(token_id_str):
     """Call tokenTier(tokenId) on Setsuko distributor. Returns 0/1/2 (normal/dark/obelith)."""
     try:
-        actual_id = token_id_str
-        if token_id_str.startswith(SETSUKO_CHAIN_PREFIX):
-            actual_id = str(int(token_id_str[len(SETSUKO_CHAIN_PREFIX):]))
-
-        token_int = int(actual_id)
+        # Use full token ID - contract expects it with prefix
+        token_int = int(token_id_str)
         data = TOKEN_TIER_SELECTOR + hex(token_int)[2:].zfill(64)
         payload = {
             "jsonrpc": "2.0",
@@ -282,7 +279,7 @@ def check_setsuko_tiers(nft_items):
     for item in nft_items:
         name = item.get("name", "")
         token_id = str(item.get("token_id", ""))
-        if name == "Setsuko" and token_id.startswith(SETSUKO_CHAIN_PREFIX):
+        if "Setsuko" in name and token_id.startswith(SETSUKO_CHAIN_PREFIX):
             tier = check_setsuko_tier_onchain(token_id)
             if tier == 2:
                 has_obelith = True
@@ -347,7 +344,7 @@ def collect_onchain_holdings(wallets):
     has_chain_hero = bool(all_nft_names & CHAIN_HERO_NAMES)
 
     # Setsuko on-chain tier check
-    if "Setsuko" in all_nft_names:
+    if any("Setsuko" in n for n in all_nft_names):
         try:
             has_obelith, has_dark = check_setsuko_tiers(all_nft_items)
         except Exception as e:
