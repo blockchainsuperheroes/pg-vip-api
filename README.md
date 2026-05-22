@@ -149,6 +149,89 @@ curl "https://api.account.pentagon.games/user/vip_status?username=nftprof"
 | `progress.next_tier` | string or null | Next tier name, null if max |
 | `progress.upgrade_options` | array | What the user needs for the next tier |
 
+## Discord Role System (Sentinel Bot)
+
+The **Sentinel** bot manages Discord role assignment for the Pentagon Games public server (`932412707209109544`). It runs on pg-identity-be alongside the VIP API and syncs roles based on PG Identity account data, on-chain holdings, and connected socials.
+
+**Bot location:** `/var/www/bots/discord-role-assigner-bot/` on pg-identity-be (AWS `13.212.154.41`)
+
+### Main Roles (8 total)
+
+These are the primary Discord roles assigned by Sentinel:
+
+| Role | Requirement | Description |
+|------|-------------|-------------|
+| **Newcomer** | No PG account or no qualifications | Default role. Removed once any real role is earned. |
+| **PG User** | `mm_address` exists on PG Identity | User has a Pentagon Games account with a wallet (generated or linked). |
+| **Web3 User** | `metamask_bind = True` | User connected an external EOA wallet (MetaMask, etc.) to their PG account. Not just the auto-generated wallet. |
+| **Social Proof** | `twitter_username` AND `telegram_username` present | User linked both Twitter and Telegram. Discord is implied (they're on the server). |
+| **BCSH Holder** | BCSH NFT count > 0 | Owns at least 1 BCSH collection NFT (aggregated across all connected wallets). |
+| **VIP1** | 10K+ ZOR **or** 200K+ PEN **or** any BCSH NFT | Entry-level VIP tier. |
+| **VIP2** | 50K+ ZOR **or** 1M+ PEN **or** Chain Hero NFT | Mid-tier VIP. |
+| **VIP3** | 5M+ PEN **or** Ethan NFT **or** Obelith Setsuko | Top-tier VIP. |
+
+### Sub-Roles (9 total)
+
+Badge/achievement roles showing what specifically qualifies a user. These are tracked in the `user_discord_roles` table alongside main roles.
+
+**Token Balance Badges:**
+
+| Sub-Role | Requirement |
+|----------|-------------|
+| **10K ZOR** | Holds 10,000+ ZOR |
+| **50K ZOR** | Holds 50,000+ ZOR |
+| **200K PEN** | Holds 200,000+ PEN (ETH + Arbitrum + Pentagon Chain combined) |
+| **1M PEN** | Holds 1,000,000+ PEN |
+| **5M PEN** | Holds 5,000,000+ PEN |
+
+**NFT Badges:**
+
+| Sub-Role | Requirement |
+|----------|-------------|
+| **BCSH** | Owns any BCSH collection NFT |
+| **Ethan** | Owns an Ethan NFT (Ethereum mainnet) |
+| **Chain Hero** | Owns any Chain Hero NFT (Setsuko, Lazuli, Avyaan, Launch, Nomad, or BCSH CORE) |
+| **Obelith** | Owns an Obelith Setsuko (on-chain `tokenTier() == 2` on Pentagon Chain) |
+
+### Role Assignment Flow
+
+1. User clicks the **"Verify Identity"** button in the `#get-roles` channel
+2. Sentinel calls PG Identity API (`/user/info_by_discord/{discord_id}`) to fetch account data
+3. Checks `mm_address`, `metamask_bind`, `twitter_username`, `telegram_username` for base roles
+4. If wallets exist, aggregates balances and NFTs across ALL connected wallets (primary + external MetaMask)
+5. Computes VIP tier from token balances and NFT holdings
+6. Assigns/removes roles accordingly
+7. Stores role state to `user_discord_roles` table via PG Identity API
+
+### Mechanics
+
+| Mechanic | Detail |
+|----------|--------|
+| **Verify cooldown** | 4 hours between manual verify button clicks |
+| **Periodic audit** | Every 4 hours, bot re-checks all role holders and removes roles if they no longer qualify |
+| **Tier regain cooldown** | Currently **disabled** (was 7-day lockout, turned off during ETH→PC bridge migration) |
+| **Multi-wallet aggregation** | Balances summed across ALL connected wallets (primary `mm_address` + all external MetaMask wallets) |
+| **Safe removal** | If any API call fails during periodic check, user is skipped entirely (never downgraded on incomplete data) |
+| **Newcomer cleanup** | Newcomer role is automatically removed when any real role is granted |
+
+### Data Sources
+
+| Data | Source | Notes |
+|------|--------|-------|
+| User identity + wallets | PG Identity API (`api.account.pentagon.games`) | Primary wallet + external wallets from `user_external_wallets` |
+| PEN balance | Service API (`api.service.pentagon.games`) + Pentagon Chain RPC | ETH + Arbitrum via Service API, Pentagon Chain via direct `balanceOf` |
+| ZOR balance | Service API (`api.service.pentagon.games`) | |
+| BCSH NFTs | `api.bcsh.xyz/user/nfts` | Paginated, Pentagon Chain |
+| Setsuko tier | Pentagon Chain RPC | `tokenTier()` on Setsuko Distributor (`0xeC18CcC474C0CB470D947bE03a107989B980AD31`) |
+| Social accounts | PG Identity `extra_data` | `twitter_username`, `telegram_username` |
+
+### Slash Commands
+
+| Command | Permission | Description |
+|---------|------------|-------------|
+| `/setup` | Admin only | Posts the Sentinel verify embed with button in the current channel |
+| `/audit` | Admin only | Runs a full role audit on all server members |
+
 ## VIP Tier Thresholds
 
 | Tier | Token Requirement | NFT Requirement | Referral Rate |
@@ -303,6 +386,7 @@ web3==7.12.0
 
 | Version | Changes |
 |---------|---------|
+| v1.5 | Added complete Discord Role System (Sentinel Bot) documentation: all 8 main roles, 9 sub-roles, assignment flow, mechanics, data sources |
 | v1.4 | Fixed Setsuko tier detection: substring name matching + full token ID for `tokenTier()` |
 | v1.3 | Made endpoint public, no auth required |
 | v1.2 | Web3 fallback for ETH PEN balance when Service API flakes |
