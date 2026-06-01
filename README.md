@@ -4,10 +4,16 @@ Unified VIP tier resolution API for Pentagon Games.
 
 Single endpoint replaces the old 3-API client-side pattern (`api.account` + `api.service` + `api.bcsh.xyz`) with one `GET /user/vip_status` call. Backend owns all tier logic. No more `Math.max` across three APIs on the frontend.
 
-## Live Endpoint
+## Live Endpoints
 
+**User VIP lookup:**
 ```
 https://api.account.pentagon.games/user/vip_status
+```
+
+**VIP tier stats (total counts):**
+```
+https://api.account.pentagon.games/stats
 ```
 
 Hosted on pg-identity-be (AWS `13.212.154.41`), port 9022, proxied through nginx alongside the identity API.
@@ -30,13 +36,21 @@ Provide at least one identifier:
 
 Multiple params can be combined. The resolver tries them in order: wallet, username, discord_id.
 
-## Example Request
+## Example Requests
 
+**Get user VIP status:**
 ```bash
 curl "https://api.account.pentagon.games/user/vip_status?username=nftprof"
 ```
 
-## Response Format
+**Get VIP tier stats:**
+```bash
+curl "https://api.account.pentagon.games/stats"
+```
+
+## Response Formats
+
+### `/user/vip_status` Response
 
 ```json
 {
@@ -86,6 +100,26 @@ curl "https://api.account.pentagon.games/user/vip_status?username=nftprof"
   }
 }
 ```
+
+### `/stats` Response
+
+Returns total VIP member counts from `user_discord_roles` table. Does not require authentication.
+
+```json
+{
+  "vip1": 44,
+  "vip2": 27,
+  "vip3": 10,
+  "total": 81,
+  "timestamp": "2026-06-01T18:06:06.615495+00:00"
+}
+```
+
+**Notes:**
+- Counts users by their **highest tier** (VIP3 > VIP2 > VIP1)
+- Data comes from most recent role sync per user
+- Updated in real-time (no caching)
+- Use for analytics, dashboards, or loyalty calculations
 
 ## Response Fields
 
