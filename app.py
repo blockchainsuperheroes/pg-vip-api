@@ -81,6 +81,34 @@ def get_vip_status_alias():
     return get_vip_status()
 
 
+@app.route("/stats", methods=["GET"])
+def get_stats():
+    """
+    GET /stats
+
+    Returns total VIP member count per tier from user_discord_roles table.
+    Does NOT require authentication.
+
+    Example response:
+    {
+      "vip1": 450,
+      "vip2": 280,
+      "vip3": 80,
+      "total": 810,
+      "timestamp": "2026-06-01T18:03:00Z"
+    }
+    """
+    try:
+        stats = resolver.get_vip_stats()
+        return jsonify(stats)
+    except Exception as e:
+        logger.exception("Stats query failed")
+        return jsonify({
+            "status": False,
+            "error": "Failed to retrieve stats"
+        }), 500
+
+
 @app.route("/health", methods=["GET"])
 def health():
     """Health check endpoint."""

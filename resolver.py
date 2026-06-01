@@ -442,6 +442,50 @@ def calc_progress(holdings, effective_tier):
 
 # ─── Main resolve ─────────────────────────────────────────────
 
+def get_vip_stats():
+    """
+    Count total VIP members per tier from user_discord_roles table.
+    Returns dict with vip1, vip2, vip3 counts + total + timestamp.
+    """
+    from datetime import datetime, timezone
+
+    # Get all users with VIP roles from most recent role sync
+    rows = db.query_all("""
+        SELECT DISTINCT ON (user_id) user_id, roles
+        FROM user_discord_roles
+        WHERE roles IS NOT NULL AND roles != ''
+        ORDER BY user_id, updated_at DESC
+    """)
+
+    vip1_count = 0
+    vip2_count = 0
+    vip3_count = 0
+
+    for row in rows:
+        roles_str = row.get("roles", "")
+        if not roles_str:
+            continue
+        roles = [r.strip() for r in roles_str.split(",") if r.strip()]
+
+        # Count highest tier only (VIP3 > VIP2 > VIP1)
+        if "VIP3" in roles:
+            vip3_count += 1
+        elif "VIP2" in roles:
+            vip2_count += 1
+        elif "VIP1" in roles:
+            vip1_count += 1
+
+    total = vip1_count + vip2_count + vip3_count
+
+    return {
+        "vip1": vip1_count,
+        "vip2": vip2_count,
+        "vip3": vip3_count,
+        "total": total,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
 def resolve(wallet=None, username=None, discord_id=None):
     """
     Main entry point. Single source of truth.
