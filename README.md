@@ -134,7 +134,16 @@ endpoints expose an **append-only tier-change log** for exactly that.
 **Auth:** API key required. Send the identity API key in the `api-key` header
 (the same key the Discord role bot uses, `PG_API_KEY`). Reads without it return `403`.
 
-**Tier values:** `0` = none, `1` = VIP1, `2` = VIP2, `3` = VIP3, `4` = partner20.
+**Tier values:** `0` = none, `1` = VIP1, `2` = VIP2, `3` = VIP3, `4` = a **custom
+manual role** (above VIP3).
+
+**Custom manual roles (tier 4):** these are roles the Discord bot does **not**
+assign automatically; they are granted manually via `set_partner_tier` (see below).
+The first one is `partner20` (20% referral bonus). More can be added later
+(`partner30`, etc.) with **no code or schema change**, each with its own bonus.
+On tier-4 history rows, the `role` field names which custom role was active
+(`partner20`, `partner30`, ...). VIP1/2/3 stay 100% Discord-bot driven and are
+unaffected.
 
 **Forward-only by design:** the log started accumulating from deploy time onward.
 There is no historical backfill. Any timestamp before logging began resolves to
@@ -143,8 +152,8 @@ A row is written **only when a user's effective tier actually changes**, so the
 log stays small.
 
 **Reward rates (basis points):** VIP2 = `500` (5%), VIP3 = `1500` (15%),
-partner20 = per-account `rate_bps` (default `2000` = 20%). Payout math for a single
-referred spend is: `reward = spend * reward_bps / 10000`.
+custom role = per-account `rate_bps` (partner20 = `2000` = 20%). Payout math for a
+single referred spend is: `reward = spend * reward_bps / 10000`.
 
 ### `GET /user/vip_tier_at` — point-in-time lookup
 
@@ -166,9 +175,13 @@ curl "https://api.account.pentagon.games/user/vip_tier_at?discord_id=68933501676
   "discord_id": "689335016760541382",
   "ts": "2026-06-06T12:00:00+00:00",
   "vip_tier": 2,
+  "role": null,
   "reward_bps": 500
 }
 ```
+
+For a user on a custom role at `ts`, `vip_tier` is `4` and `role` names it, e.g.
+`{"vip_tier": 4, "role": "partner20", "reward_bps": 2000}`.
 
 ### `POST /user/vip_tier_at_batch` — bulk point-in-time
 
@@ -238,41 +251,49 @@ curl "https://api.account.pentagon.games/user/vip_tier_changes?since=2026-06-06T
   "count": 2,
   "next_since": "2026-06-06T03:46:36.018772+00:00",
   "changes": [
-    {"discord_id": "689335016760541382", "old_tier": 0, "tier": 2, "source": "verify", "changed_at": "2026-06-06T03:42:03.807141+00:00"},
-    {"discord_id": "689335016760541382", "old_tier": 2, "tier": 4, "source": "partner", "changed_at": "2026-06-06T03:46:36.018772+00:00"}
+    {"discord_id": "689335016760541382", "old_tier": 0, "tier": 2, "role": null, "source": "verify", "changed_at": "2026-06-06T03:42:03.807141+00:00"},
+    {"discord_id": "689335016760541382", "old_tier": 2, "tier": 4, "role": "partner20", "source": "partner", "changed_at": "2026-06-06T03:46:36.018772+00:00"}
   ]
 }
 ```
 
-`tier` is the **new** tier after the change. Poll loop: store `next_since`, pass it
-back as `since` next time. `source` is one of `verify`, `periodic_removal`,
-`audit`, `manual`, `partner`.
+`tier` is the **new** tier after the change. `role` names the custom role on
+tier-4 rows (`partner20`, `partner30`, ...) and is `null` for ordinary VIP
+changes. Poll loop: store `next_since`, pass it back as `since` next time.
+`source` is one of `verify`, `periodic_removal`, `audit`, `manual`, `partner`.
 
-### `POST /user/set_partner_tier` — set/clear partner20 (admin)
+### `POST /user/set_partner_tier` — grant/revoke a custom manual role (admin)
 
-partner20 is **not** a bot-computed Discord role; it is a manual flag. Setting it
-writes a transition into the **same** tier-history log (tier `4`), so partner
-earnings time-gate exactly like VIP2/VIP3. Activating writes `tier -> 4`; clearing
-writes `4 -> current-VIP-tier`. partner20 also survives routine role-bot re-stores
-(the bot cannot log a spurious downgrade over an active partner).
+Custom roles (`partner20`, and later `partner30`, etc.) are **not** bot-computed
+Discord roles; they are granted manually here. Setting one writes a transition
+into the **same** tier-history log (tier `4`, tagged with the role name in the
+`role` field), so its earnings time-gate exactly like VIP2/VIP3. Activating writes
+`tier -> 4`; clearing writes `4 -> current-VIP-tier`. A custom role also survives
+routine role-bot re-stores (the bot cannot log a spurious downgrade over it).
+
+**Identify the user by any ONE of:** `discord_id`, `username` (PG/PNS), `email`,
+or `wallet`.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `discord_id` | string | Discord user snowflake ID (required) |
-| `is_active` | bool | `true` to grant partner20, `false` to revoke (required) |
-| `rate_bps` | int | Reward rate in basis points (default `2000` = 20%) |
+| `role_name` | string | Custom role, e.g. `partner20` (optional, default `partner20`) |
+| `is_active` | bool | `true` to grant, `false` to revoke (required) |
+| `rate_bps` | int | Reward rate in basis points. Optional; defaults by role (`partner20`=2000, `partner30`=3000). For an unknown role name, `rate_bps` is **required**. |
 | `note` | string | Optional admin note |
+| `discord_id` / `username` / `email` / `wallet` | string | User identifier (one required) |
 
 ```bash
+# Grant partner20 to a user by email
 curl -X POST "https://api.account.pentagon.games/user/set_partner_tier" \
   -H "api-key: <IDENTITY_API_KEY>" -H "Content-Type: application/json" \
-  -d '{"discord_id":"689335016760541382","is_active":true,"rate_bps":2000,"note":"Q3 launch partner"}'
+  -d '{"email":"nftprof@pentagon.games","role_name":"partner20","is_active":true}'
 ```
 
 ```json
 {
   "status": true,
   "discord_id": "689335016760541382",
+  "role_name": "partner20",
   "is_active": true,
   "rate_bps": 2000,
   "logged_change": true,
@@ -280,17 +301,28 @@ curl -X POST "https://api.account.pentagon.games/user/set_partner_tier" \
 }
 ```
 
+A future `partner30` is just a different `role_name` (and `rate_bps`), no deploy
+needed for the standard ones:
+
+```bash
+curl -X POST "https://api.account.pentagon.games/user/set_partner_tier" \
+  -H "api-key: <IDENTITY_API_KEY>" -H "Content-Type: application/json" \
+  -d '{"discord_id":"<id>","role_name":"partner30","is_active":true}'
+```
+
 ### Referral payout flow (end to end)
 
 1. The Discord role bot keeps doing what it already does: on every verify and
    every periodic check it POSTs to `/user/discord/store_roles`. That endpoint
    now logs a tier-history row whenever the effective tier changes.
-2. Grant partner20 to partner accounts via `POST /user/set_partner_tier`.
+2. Grant custom roles (partner20, ...) to partner accounts via
+   `POST /user/set_partner_tier`.
 3. The payment stack mirrors the log via `GET /user/vip_tier_changes?since=`
    (incremental) **or** resolves on demand via `vip_tier_at` / `vip_tier_at_batch`.
 4. For each referred-user spend, resolve the referrer's `reward_bps` at the spend
    timestamp and accrue `spend * reward_bps / 10000`. Spends before the referrer
-   reached VIP2+ contribute `0`.
+   reached VIP2+ contribute `0`. The `role` field tells you which partner tier
+   (partner20 vs a future partner30) applied, if you need per-tier accounting.
 
 ## Response Fields
 
@@ -591,6 +623,7 @@ web3==7.12.0
 
 | Version | Changes |
 |---------|---------|
+| v1.7 | Generalized tier 4 into named **custom manual roles** (`partner20`, future `partner30`, ...), each with its own bonus. `set_partner_tier` now takes `role_name` and resolves users by discord_id/username/email/wallet. `vip_tier_at` and `vip_tier_changes` expose the active `role`. |
 | v1.6 | Added VIP Tier History API for referral payout qualification: point-in-time (`vip_tier_at`), batch (`vip_tier_at_batch`), per-user log (`vip_tier_history`), bulk changelog (`vip_tier_changes`), and partner20 management (`set_partner_tier`). partner20 = tier 4 in the same history log. |
 | v1.5 | Added complete Discord Role System (Sentinel Bot) documentation: all 8 main roles, 9 sub-roles, assignment flow, mechanics, data sources |
 | v1.4 | Fixed Setsuko tier detection: substring name matching + full token ID for `tokenTier()` |
