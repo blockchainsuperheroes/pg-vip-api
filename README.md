@@ -121,6 +121,177 @@ Returns total VIP member counts from `user_discord_roles` table. Does not requir
 - Updated in real-time (no caching)
 - Use for analytics, dashboards, or loyalty calculations
 
+---
+
+## VIP Tier History API (referral payout qualification)
+
+The endpoints above return a user's **current** tier. For referral payouts we also
+need to know what tier a referrer held **at the moment of each referred spend**,
+because rewards only accrue while the referrer is VIP2, VIP3, or partner20. These
+endpoints expose an **append-only tier-change log** for exactly that.
+
+**Hosted on:** identity API, `https://api.account.pentagon.games` (pg-identity-be, port `8031`).
+**Auth:** API key required. Send the identity API key in the `api-key` header
+(the same key the Discord role bot uses, `PG_API_KEY`). Reads without it return `403`.
+
+**Tier values:** `0` = none, `1` = VIP1, `2` = VIP2, `3` = VIP3, `4` = partner20.
+
+**Forward-only by design:** the log started accumulating from deploy time onward.
+There is no historical backfill. Any timestamp before logging began resolves to
+tier `0`, which matches the rule that referral rewards never apply retroactively.
+A row is written **only when a user's effective tier actually changes**, so the
+log stays small.
+
+**Reward rates (basis points):** VIP2 = `500` (5%), VIP3 = `1500` (15%),
+partner20 = per-account `rate_bps` (default `2000` = 20%). Payout math for a single
+referred spend is: `reward = spend * reward_bps / 10000`.
+
+### `GET /user/vip_tier_at` — point-in-time lookup
+
+Returns the tier (and reward rate) a user held at a given timestamp.
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `discord_id` | string | Discord user snowflake ID (required) |
+| `ts` | string | ISO-8601 timestamp. Defaults to now if omitted. |
+
+```bash
+curl "https://api.account.pentagon.games/user/vip_tier_at?discord_id=689335016760541382&ts=2026-06-06T12:00:00Z" \
+  -H "api-key: <IDENTITY_API_KEY>"
+```
+
+```json
+{
+  "status": true,
+  "discord_id": "689335016760541382",
+  "ts": "2026-06-06T12:00:00+00:00",
+  "vip_tier": 2,
+  "reward_bps": 500
+}
+```
+
+### `POST /user/vip_tier_at_batch` — bulk point-in-time
+
+Resolve many (discord_id, timestamp) pairs in one round-trip. Designed so the
+payment stack can resolve a referrer's tier at the timestamp of every referred
+spend at once. Max **1000** queries per call.
+
+```bash
+curl -X POST "https://api.account.pentagon.games/user/vip_tier_at_batch" \
+  -H "api-key: <IDENTITY_API_KEY>" -H "Content-Type: application/json" \
+  -d '{"queries":[{"discord_id":"689335016760541382","ts":"2026-06-06T12:00:00Z"},{"discord_id":"689335016760541382","ts":"2026-05-01T00:00:00Z"}]}'
+```
+
+```json
+{
+  "status": true,
+  "results": [
+    {"discord_id": "689335016760541382", "ok": true, "ts": "2026-06-06T12:00:00+00:00", "vip_tier": 2, "reward_bps": 500},
+    {"discord_id": "689335016760541382", "ok": true, "ts": "2026-05-01T00:00:00+00:00", "vip_tier": 0, "reward_bps": 0}
+  ]
+}
+```
+
+### `GET /user/vip_tier_history` — full change log for one user
+
+Returns every tier transition for a user, ascending by time.
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `discord_id` | string | Discord user snowflake ID (required) |
+
+```bash
+curl "https://api.account.pentagon.games/user/vip_tier_history?discord_id=689335016760541382" \
+  -H "api-key: <IDENTITY_API_KEY>"
+```
+
+```json
+{
+  "status": true,
+  "discord_id": "689335016760541382",
+  "history": [
+    {"old_tier": 0, "new_tier": 2, "roles_snapshot": "BCSH Holder,PG User,VIP1,VIP2", "source": "verify", "changed_at": "2026-06-06T03:42:03.807141+00:00"},
+    {"old_tier": 2, "new_tier": 4, "roles_snapshot": "partner", "source": "partner", "changed_at": "2026-06-06T03:46:36.018772+00:00"}
+  ]
+}
+```
+
+### `GET /user/vip_tier_changes` — bulk changelog (incremental sync)
+
+Returns tier changes across **all users** with `changed_at` greater than `since`,
+ascending, plus a `next_since` cursor for the next poll. Use this to mirror the
+log into the payment DB and derive `effective_from`/`effective_to` ranges yourself.
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `since` | string | ISO-8601 timestamp. Returns changes strictly after this. Omit for all. |
+| `limit` | int | Max rows (default `1000`, max `5000`) |
+
+```bash
+curl "https://api.account.pentagon.games/user/vip_tier_changes?since=2026-06-06T00:00:00Z&limit=1000" \
+  -H "api-key: <IDENTITY_API_KEY>"
+```
+
+```json
+{
+  "status": true,
+  "count": 2,
+  "next_since": "2026-06-06T03:46:36.018772+00:00",
+  "changes": [
+    {"discord_id": "689335016760541382", "old_tier": 0, "tier": 2, "source": "verify", "changed_at": "2026-06-06T03:42:03.807141+00:00"},
+    {"discord_id": "689335016760541382", "old_tier": 2, "tier": 4, "source": "partner", "changed_at": "2026-06-06T03:46:36.018772+00:00"}
+  ]
+}
+```
+
+`tier` is the **new** tier after the change. Poll loop: store `next_since`, pass it
+back as `since` next time. `source` is one of `verify`, `periodic_removal`,
+`audit`, `manual`, `partner`.
+
+### `POST /user/set_partner_tier` — set/clear partner20 (admin)
+
+partner20 is **not** a bot-computed Discord role; it is a manual flag. Setting it
+writes a transition into the **same** tier-history log (tier `4`), so partner
+earnings time-gate exactly like VIP2/VIP3. Activating writes `tier -> 4`; clearing
+writes `4 -> current-VIP-tier`. partner20 also survives routine role-bot re-stores
+(the bot cannot log a spurious downgrade over an active partner).
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `discord_id` | string | Discord user snowflake ID (required) |
+| `is_active` | bool | `true` to grant partner20, `false` to revoke (required) |
+| `rate_bps` | int | Reward rate in basis points (default `2000` = 20%) |
+| `note` | string | Optional admin note |
+
+```bash
+curl -X POST "https://api.account.pentagon.games/user/set_partner_tier" \
+  -H "api-key: <IDENTITY_API_KEY>" -H "Content-Type: application/json" \
+  -d '{"discord_id":"689335016760541382","is_active":true,"rate_bps":2000,"note":"Q3 launch partner"}'
+```
+
+```json
+{
+  "status": true,
+  "discord_id": "689335016760541382",
+  "is_active": true,
+  "rate_bps": 2000,
+  "logged_change": true,
+  "new_tier": 4
+}
+```
+
+### Referral payout flow (end to end)
+
+1. The Discord role bot keeps doing what it already does: on every verify and
+   every periodic check it POSTs to `/user/discord/store_roles`. That endpoint
+   now logs a tier-history row whenever the effective tier changes.
+2. Grant partner20 to partner accounts via `POST /user/set_partner_tier`.
+3. The payment stack mirrors the log via `GET /user/vip_tier_changes?since=`
+   (incremental) **or** resolves on demand via `vip_tier_at` / `vip_tier_at_batch`.
+4. For each referred-user spend, resolve the referrer's `reward_bps` at the spend
+   timestamp and accrue `spend * reward_bps / 10000`. Spends before the referrer
+   reached VIP2+ contribute `0`.
+
 ## Response Fields
 
 ### Tier Resolution
@@ -420,6 +591,7 @@ web3==7.12.0
 
 | Version | Changes |
 |---------|---------|
+| v1.6 | Added VIP Tier History API for referral payout qualification: point-in-time (`vip_tier_at`), batch (`vip_tier_at_batch`), per-user log (`vip_tier_history`), bulk changelog (`vip_tier_changes`), and partner20 management (`set_partner_tier`). partner20 = tier 4 in the same history log. |
 | v1.5 | Added complete Discord Role System (Sentinel Bot) documentation: all 8 main roles, 9 sub-roles, assignment flow, mechanics, data sources |
 | v1.4 | Fixed Setsuko tier detection: substring name matching + full token ID for `tokenTier()` |
 | v1.3 | Made endpoint public, no auth required |
@@ -434,3 +606,5 @@ web3==7.12.0
 **For frontend VIP pages:** Call with `wallet` or `username`. The `progress` field gives upgrade paths. `referral_rate_display` is ready to show.
 
 **Multi-wallet:** Users with multiple bound wallets get aggregated balances across all wallets. PEN on Ethereum + Pentagon Chain + Arbitrum are summed per wallet, then totaled.
+
+**For referral payouts:** Use the [VIP Tier History API](#vip-tier-history-api-referral-payout-qualification). Mirror the log incrementally with `vip_tier_changes?since=`, or resolve a referrer's tier at each spend timestamp with `vip_tier_at_batch`. These live on the identity API (port `8031`) and require the `api-key` header, unlike the public `vip_status`/`stats` reads. The history is forward-only, so it must be live before payouts are calculated.
