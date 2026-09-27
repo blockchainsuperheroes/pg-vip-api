@@ -4,6 +4,8 @@ Unified VIP tier resolution API for Pentagon Games.
 
 Single endpoint replaces the old 3-API client-side pattern (`api.account` + `api.service` + `api.bcsh.xyz`) with one `GET /user/vip_status` call. Backend owns all tier logic. No more `Math.max` across three APIs on the frontend.
 
+> **VIP seasoning is enforced (live since 2026-09-17).** The tier a user actually receives is time-seasoned: a threshold must be held 48h continuously before it grants, a lost tier has a 7-day regain cooldown, and tiers are lost when the holding drops. `effective_tier` is read from the seasoned state, and `resolved_from` is `seasoned`. See [VIP Seasoning](#vip-seasoning-live-since-2026-09-17).
+
 ## Live Endpoints
 
 **User VIP lookup:**
@@ -16,7 +18,19 @@ https://api.account.pentagon.games/user/vip_status
 https://api.account.pentagon.games/stats
 ```
 
+**Seasoning countdowns (per-tier active/pending/locked):**
+```
+https://api.account.pentagon.games/vip/status_detail
+```
+
+**Bulk tier lookup (used by mining at draw time):**
+```
+POST https://api.account.pentagon.games/vip/tier_batch
+```
+
 Hosted on pg-identity-be (AWS `13.212.154.41`), port 9022, proxied through nginx alongside the identity API.
+
+`vip_status`, `status_detail` and `tier_batch` all return the **seasoned** effective tier (from `user_vip_effective`). On a balance-feed outage they report `status: "unknown"` and never downgrade.
 
 ## Authentication
 
@@ -120,6 +134,32 @@ Returns total VIP member counts from `user_discord_roles` table. Does not requir
 - Data comes from most recent role sync per user
 - Updated in real-time (no caching)
 - Use for analytics, dashboards, or loyalty calculations
+
+---
+
+## VIP Seasoning (live since 2026-09-17)
+
+Tiers are time-locked to stop wallet-shuffling (moving the same bag across accounts to bake a boost). Enforcement is gated by `VIP_SEASONING_ENFORCE=1` on pg-vip-api; a cron re-evaluates every 4 hours.
+
+**Rules (Option A):**
+
+| Rule | Behavior |
+|------|----------|
+| **Gain a tier** | Hold its threshold **48h continuously** — no instant grant |
+| **Upgrade** | Moving to a **higher** tier is immediate (no 48h wait) |
+| **Regain** | After losing a tier, a **7-day cooldown** before it can be held again |
+| **Lose-on-drop** | Fall below the threshold and the tier is lost |
+| **Outage-safe** | On a balance-feed failure the status is `unknown`; the tier is never demoted |
+
+When enforcement is on, `resolve()` returns `effective_tier` from the `user_vip_effective` table and sets `resolved_from = "seasoned"`. Seasoning state lives in `user_vip_seasoning`, losses in `user_vip_loss`. All 79 verified holders were grandfathered at `max(discord role, on-chain)` at flip.
+
+**Enforced consumers:** the mining boost and `vip.pentagon.games` (both read the seasoned tier). The Discord role bot still grants a role only on the **Verify** button and its periodic loop only removes — so a member who loses then regains a tier must re-click Verify.
+
+## Membership v2 (planned)
+
+A ranks-and-badges layer is designed but not built. The public-facing names and the full rank/badge/perk matrix are maintained by the members-site team as the canonical **roles reference** (rendered at `members.pentagon.games`). This API doc stays the backend/developer source of truth; the two are kept in sync.
+
+Planned additions on this service: `GET /user/membership` (rank, badges, draw tickets, `lost_forever`), `POST /badges/grant|revoke` (scoped Api-Key, for external pushers), a subscription entitlement trigger, and per-user badge/rank-history tables. Public ranks map to the internal codes 1:1 — Bronze Key = `VIP1`, Silver Shield = `VIP2`, Gold Crown = `VIP3` — which never renumber.
 
 ---
 
@@ -329,11 +369,11 @@ curl -X POST "https://api.account.pentagon.games/user/set_partner_tier" \
 ### Tier Resolution
 | Field | Type | Description |
 |-------|------|-------------|
-| `effective_tier` | int | Final tier (0-3). `max(on_chain_tier, role_tier)` |
+| `effective_tier` | int | Final tier (0-3). With seasoning enforced, the **seasoned** tier from `user_vip_effective`; otherwise `max(on_chain_tier, role_tier)` |
 | `tier_name` | string | Human-readable: Newcomer, VIP1, VIP2, VIP3 |
-| `on_chain_tier` | int | Tier from on-chain holdings (Source B) |
+| `on_chain_tier` | int | Tier from on-chain holdings (Source B), pre-seasoning |
 | `role_tier` | int | Tier from Discord role sync (Source A) |
-| `resolved_from` | string | Which source won: `on_chain`, `discord_role`, or `both_equal` |
+| `resolved_from` | string | Which source won: `seasoned` (enforcement on), `on_chain`, `discord_role`, or `both_equal` |
 
 ### Identity
 | Field | Type | Description |
@@ -446,7 +486,7 @@ Badge/achievement roles showing what specifically qualifies a user. These are tr
 |----------|--------|
 | **Verify cooldown** | 4 hours between manual verify button clicks |
 | **Periodic audit** | Every 4 hours, bot re-checks all role holders and removes roles if they no longer qualify |
-| **Tier regain cooldown** | Currently **disabled** (was 7-day lockout, turned off during ETH→PC bridge migration) |
+| **Tier regain cooldown** | **7 days** — active under seasoning enforcement (a lost tier cannot be regained for 7 days). Re-verify grants the role immediately once seasoned state allows |
 | **Multi-wallet aggregation** | Balances summed across ALL connected wallets (primary `mm_address` + all external MetaMask wallets) |
 | **Safe removal** | If any API call fails during periodic check, user is skipped entirely (never downgraded on incomplete data) |
 | **Newcomer cleanup** | Newcomer role is automatically removed when any real role is granted |
@@ -623,6 +663,7 @@ web3==7.12.0
 
 | Version | Changes |
 |---------|---------|
+| v1.8 | **VIP seasoning enforced** (48h to gain, immediate on upgrade, 7-day regain cooldown, lose-on-drop, outage-safe). `effective_tier` now read from `user_vip_effective`; `resolved_from = "seasoned"`. Added `GET /vip/status_detail` (per-tier countdowns) and `POST /vip/tier_batch` (bulk, mining draw-time). Documented the planned Membership v2 layer. |
 | v1.7 | Generalized tier 4 into named **custom manual roles** (`partner20`, future `partner30`, ...), each with its own bonus. `set_partner_tier` now takes `role_name` and resolves users by discord_id/username/email/wallet. `vip_tier_at` and `vip_tier_changes` expose the active `role`. |
 | v1.6 | Added VIP Tier History API for referral payout qualification: point-in-time (`vip_tier_at`), batch (`vip_tier_at_batch`), per-user log (`vip_tier_history`), bulk changelog (`vip_tier_changes`), and partner20 management (`set_partner_tier`). partner20 = tier 4 in the same history log. |
 | v1.5 | Added complete Discord Role System (Sentinel Bot) documentation: all 8 main roles, 9 sub-roles, assignment flow, mechanics, data sources |
